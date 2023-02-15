@@ -61,6 +61,7 @@ const (
 
 // scheduleOne does the entire scheduling workflow for a single pod. It is serialized on the scheduling algorithm's host fitting.
 func (sched *Scheduler) scheduleOne(ctx context.Context) {
+	// 从 scheduler 调度队列中取出一个 pod，如果该 pod 处于删除状态则跳过
 	podInfo := sched.NextPod()
 	// pod could be nil when schedulerQueue is closed
 	if podInfo == nil || podInfo.Pod == nil {
@@ -94,6 +95,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
 
 	scheduleResult, assumedPodInfo, status := sched.schedulingCycle(schedulingCycleCtx, state, fwk, podInfo, start, podsToActivate)
 	if !status.IsSuccess() {
+		// 调度失败的逻辑，抢占发生
 		sched.FailureHandler(schedulingCycleCtx, fwk, assumedPodInfo, status, scheduleResult.nominatingInfo, start)
 		return
 	}
@@ -108,6 +110,7 @@ func (sched *Scheduler) scheduleOne(ctx context.Context) {
 		metrics.Goroutines.WithLabelValues(metrics.Binding).Inc()
 		defer metrics.Goroutines.WithLabelValues(metrics.Binding).Dec()
 
+		// 绑定逻辑
 		status := sched.bindingCycle(bindingCycleCtx, state, fwk, scheduleResult, assumedPodInfo, start, podsToActivate)
 		if !status.IsSuccess() {
 			sched.handleBindingCycleError(bindingCycleCtx, state, fwk, assumedPodInfo, start, scheduleResult, status)
@@ -396,6 +399,7 @@ func (sched *Scheduler) findNodesThatFitPod(ctx context.Context, fwk framework.F
 		return nil, diagnosis, err
 	}
 	// Run "prefilter" plugins.
+	// 预处理
 	preRes, s := fwk.RunPreFilterPlugins(ctx, state, pod)
 	if !s.IsSuccess() {
 		if !s.IsUnschedulable() {
@@ -436,6 +440,7 @@ func (sched *Scheduler) findNodesThatFitPod(ctx context.Context, fwk framework.F
 			nodes = append(nodes, nInfo)
 		}
 	}
+	// 满足filter过滤插件的节点
 	feasibleNodes, err := sched.findNodesThatPassFilters(ctx, fwk, state, pod, diagnosis, nodes)
 	// always try to update the sched.nextStartNodeIndex regardless of whether an error has occurred
 	// this is helpful to make sure that all the nodes have a chance to be searched
@@ -445,6 +450,7 @@ func (sched *Scheduler) findNodesThatFitPod(ctx context.Context, fwk framework.F
 		return nil, diagnosis, err
 	}
 
+	// 满足Extenders的节点
 	feasibleNodes, err = findNodesThatPassExtenders(sched.Extenders, pod, feasibleNodes, diagnosis.NodeToStatusMap)
 	if err != nil {
 		return nil, diagnosis, err
@@ -481,6 +487,7 @@ func (sched *Scheduler) findNodesThatPassFilters(
 	diagnosis framework.Diagnosis,
 	nodes []*framework.NodeInfo) ([]*v1.Node, error) {
 	numAllNodes := len(nodes)
+	// 选择参与调度的节点的数量
 	numNodesToFind := sched.numFeasibleNodesToFind(fwk.PercentageOfNodesToScore(), int32(numAllNodes))
 
 	// Create feasible list with enough space to avoid growing it

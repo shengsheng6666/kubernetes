@@ -41,7 +41,7 @@ MAKEFLAGS += --no-builtin-rules
 .SUFFIXES:
 
 # Constants used throughout.
-.EXPORT_ALL_VARIABLES:
+.EXPORT_KALL_VARIABLES:
 OUT_DIR ?= _output
 BIN_DIR := $(OUT_DIR)/bin
 PRJ_SRC_PATH := k8s.io/kubernetes

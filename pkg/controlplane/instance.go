@@ -356,6 +356,7 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 		return nil, err
 	}
 
+	// 注册log路由  /logs 和 /logs/{logpath:*}
 	if c.ExtraConfig.EnableLogsSupport {
 		routes.Logs{}.Install(s.Handler.GoRestfulContainer)
 	}
@@ -387,6 +388,7 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 			klog.Info(msg)
 		}
 	} else {
+		// 注册OpenAPI ConfigPath /.well-known/openid-configuration 和 JWKPath /openid/v1/jwks 路由
 		routes.NewOpenIDMetadataServer(md.ConfigJSON, md.PublicKeysetJSON).
 			Install(s.Handler.GoRestfulContainer)
 	}
@@ -398,6 +400,7 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 
 	// install legacy rest storage
 
+	// 安装核心无分组资源
 	if err := m.InstallLegacyAPI(&c, c.GenericConfig.RESTOptionsGetter); err != nil {
 		return nil, err
 	}
@@ -440,6 +443,8 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 		eventsrest.RESTStorageProvider{TTL: c.ExtraConfig.EventTTL},
 		resourcerest.RESTStorageProvider{},
 	}
+
+	// 安装核心分组资源
 	if err := m.InstallAPIs(c.ExtraConfig.APIResourceConfigSource, c.GenericConfig.RESTOptionsGetter, restStorageProviders...); err != nil {
 		return nil, err
 	}
@@ -609,6 +614,7 @@ func (m *Instance) InstallLegacyAPI(c *completedConfig, restOptionsGetter generi
 	m.GenericAPIServer.AddPostStartHookOrDie(controllerName, bootstrapController.PostStartHook)
 	m.GenericAPIServer.AddPreShutdownHookOrDie(controllerName, bootstrapController.PreShutdownHook)
 
+	// 安装路由到/api下
 	if err := m.GenericAPIServer.InstallLegacyAPIGroup(genericapiserver.DefaultLegacyAPIPrefix, &apiGroupInfo); err != nil {
 		return fmt.Errorf("error in registering group versions: %v", err)
 	}

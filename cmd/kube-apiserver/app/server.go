@@ -91,7 +91,9 @@ func init() {
 
 // NewAPIServerCommand creates a *cobra.Command object with default parameters
 func NewAPIServerCommand() *cobra.Command {
+	// 创建一个ServerRunOptions指针，它使用默认参数返回
 	s := options.NewServerRunOptions()
+	// 返回cobra.command指针，用户函数return
 	cmd := &cobra.Command{
 		Use: "kube-apiserver",
 		Long: `The Kubernetes API server validates and configures data
@@ -101,14 +103,18 @@ cluster's shared state through which all other components interact.`,
 
 		// stop printing usage when the command errors
 		SilenceUsage: true,
+		// cli.run中Excute执行前的函数
 		PersistentPreRunE: func(*cobra.Command, []string) error {
 			// silence client-go warnings.
 			// kube-apiserver loopback clients should not log self-issued warnings.
 			rest.SetDefaultWarningHandler(rest.NoWarnings{})
 			return nil
 		},
+		// cli.run.Excute调用函数
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// 如果有veriosn参数则打印版本并退出
 			verflag.PrintAndExitIfRequested()
+			// 返回cmd的flagset指针
 			fs := cmd.Flags()
 
 			// Activate logging as soon as possible, after that
@@ -119,19 +125,23 @@ cluster's shared state through which all other components interact.`,
 			cliflag.PrintFlags(fs)
 
 			// set default options
+			// 填充默认参数配置
 			completedOptions, err := Complete(s)
 			if err != nil {
 				return err
 			}
 
 			// validate options
+			// 校验flag是否合法
 			if errs := completedOptions.Validate(); len(errs) != 0 {
 				return utilerrors.NewAggregate(errs)
 			}
 			// add feature enablement metrics
+			// 添加metrics
 			utilfeature.DefaultMutableFeatureGate.AddMetrics()
 			return Run(completedOptions, genericapiserver.SetupSignalHandler())
 		},
+		// api-server不应有任何参数，选项都是flag
 		Args: func(cmd *cobra.Command, args []string) error {
 			for _, arg := range args {
 				if len(arg) > 0 {
@@ -142,16 +152,24 @@ cluster's shared state through which all other components interact.`,
 		},
 	}
 
+	// 返回cmd的flagset指针
 	fs := cmd.Flags()
+	// 将ServerRunOptions的flag按功能分组实例化一个namedFlagset实例
 	namedFlagSets := s.Flags()
+	// 在globel功能分组中添加version
 	verflag.AddFlags(namedFlagSets.FlagSet("global"))
+	// globel功能分组中添加help
 	globalflag.AddGlobalFlags(namedFlagSets.FlagSet("global"), cmd.Name(), logs.SkipLoggingConfigurationFlags())
+	// 在generic功能中添加自定义flag
 	options.AddCustomGlobalFlags(namedFlagSets.FlagSet("generic"))
+	// 在fs指针赋值全部name分组
 	for _, f := range namedFlagSets.FlagSets {
 		fs.AddFlagSet(f)
 	}
 
+	// 获取用户终端宽度
 	cols, _, _ := term.TerminalSize(cmd.OutOrStdout())
+	// 设置usage帮助
 	cliflag.SetUsageAndHelpFunc(cmd, namedFlagSets, cols)
 
 	return cmd
@@ -160,30 +178,36 @@ cluster's shared state through which all other components interact.`,
 // Run runs the specified APIServer.  This should never exit.
 func Run(completeOptions completedServerRunOptions, stopCh <-chan struct{}) error {
 	// To help debugging, immediately log version
+	// 日志记录版本和golang配置
 	klog.Infof("Version: %+v", version.Get())
 
 	klog.InfoS("Golang settings", "GOGC", os.Getenv("GOGC"), "GOMAXPROCS", os.Getenv("GOMAXPROCS"), "GOTRACEBACK", os.Getenv("GOTRACEBACK"))
 
+	// 创建服务链
 	server, err := CreateServerChain(completeOptions)
 	if err != nil {
 		return err
 	}
 
+	// 启动server前的准备工作
 	prepared, err := server.PrepareRun()
 	if err != nil {
 		return err
 	}
 
+	// 最后启动http server，开始监听接收客户端请求
 	return prepared.Run(stopCh)
 }
 
 // CreateServerChain creates the apiservers connected via delegation.
 func CreateServerChain(completedOptions completedServerRunOptions) (*aggregatorapiserver.APIAggregator, error) {
+	// 根据命令行参数创建配置集合（包含通用配置与额外配置），service解析器、插件初始化器
 	kubeAPIServerConfig, serviceResolver, pluginInitializer, err := CreateKubeAPIServerConfig(completedOptions)
 	if err != nil {
 		return nil, err
 	}
 
+	// 根据配置集合创建apiExtensions配置
 	// If additional API servers are added, they should be gated.
 	apiExtensionsConfig, err := createAPIExtensionsConfig(*kubeAPIServerConfig.GenericConfig, kubeAPIServerConfig.ExtraConfig.VersionedInformers, pluginInitializer, completedOptions.ServerRunOptions, completedOptions.MasterCount,
 		serviceResolver, webhook.NewDefaultAuthenticationInfoResolverWrapper(kubeAPIServerConfig.ExtraConfig.ProxyTransport, kubeAPIServerConfig.GenericConfig.EgressSelector, kubeAPIServerConfig.GenericConfig.LoopbackClientConfig, kubeAPIServerConfig.GenericConfig.TracerProvider))
@@ -192,27 +216,32 @@ func CreateServerChain(completedOptions completedServerRunOptions) (*aggregatora
 	}
 
 	notFoundHandler := notfoundhandler.New(kubeAPIServerConfig.GenericConfig.Serializer, genericapifilters.NoMuxAndDiscoveryIncompleteKey)
+	//创建apiExtensions服务，apiextensionsserver用于处理对CRD资源的CURD请求
 	apiExtensionsServer, err := createAPIExtensionsServer(apiExtensionsConfig, genericapiserver.NewEmptyDelegateWithCustomHandler(notFoundHandler))
 	if err != nil {
 		return nil, err
 	}
 
+	//创建api-server服务，并代理apiExtensions
 	kubeAPIServer, err := CreateKubeAPIServer(kubeAPIServerConfig, apiExtensionsServer.GenericAPIServer)
 	if err != nil {
 		return nil, err
 	}
 
+	// 根据配置集合创建aggregator配置
 	// aggregator comes last in the chain
 	aggregatorConfig, err := createAggregatorConfig(*kubeAPIServerConfig.GenericConfig, completedOptions.ServerRunOptions, kubeAPIServerConfig.ExtraConfig.VersionedInformers, serviceResolver, kubeAPIServerConfig.ExtraConfig.ProxyTransport, pluginInitializer)
 	if err != nil {
 		return nil, err
 	}
+	// 创建aggregator服务并代理api-server服务
 	aggregatorServer, err := createAggregatorServer(aggregatorConfig, kubeAPIServer.GenericAPIServer, apiExtensionsServer.Informers)
 	if err != nil {
 		// we don't need special handling for innerStopCh because the aggregator server doesn't create any go routines
 		return nil, err
 	}
 
+	// 只返回aggregator服务
 	return aggregatorServer, nil
 }
 
@@ -240,8 +269,10 @@ func CreateKubeAPIServerConfig(s completedServerRunOptions) (
 	[]admission.PluginInitializer,
 	error,
 ) {
+	// 创建一个与节点的通信器
 	proxyTransport := CreateProxyTransport()
 
+	//构建通用配置
 	genericConfig, versionedInformers, serviceResolver, pluginInitializers, admissionPostStartHook, storageFactory, err := buildGenericConfig(s.ServerRunOptions, proxyTransport)
 	if err != nil {
 		return nil, nil, nil, err
@@ -252,6 +283,7 @@ func CreateKubeAPIServerConfig(s completedServerRunOptions) (
 	s.Metrics.Apply()
 	serviceaccount.RegisterMetrics()
 
+	// 创建一个配置集合实例的指针，通用配置为上面生成的，额外配置有默认的，有命令行传入的
 	config := &controlplane.Config{
 		GenericConfig: genericConfig,
 		ExtraConfig: controlplane.ExtraConfig{
@@ -349,31 +381,41 @@ func buildGenericConfig(
 	storageFactory *serverstorage.DefaultStorageFactory,
 	lastErr error,
 ) {
+	// 实例化genericConfig
 	genericConfig = genericapiserver.NewConfig(legacyscheme.Codecs)
+	// 设置启用禁用GV及resource，如果命令行中未指定，则通过此处启用默认设置的GV及资源，默认启用stable和legacy
 	genericConfig.MergedResourceConfig = controlplane.DefaultAPIResourceConfigSource()
 
+	// 将命令行flag的通用配置赋值给通用配置
 	if lastErr = s.GenericServerRunOptions.ApplyTo(genericConfig); lastErr != nil {
 		return
 	}
 
+	// 将命令行参数的安全服务flag赋值给通用配置
 	if lastErr = s.SecureServing.ApplyTo(&genericConfig.SecureServing, &genericConfig.LoopbackClientConfig); lastErr != nil {
 		return
 	}
+
+	// 将命令行参数的特性flag赋值给通用配置
 	if lastErr = s.Features.ApplyTo(genericConfig); lastErr != nil {
 		return
 	}
+	// 将命令行参数的api启动flag赋值给通用配置
 	if lastErr = s.APIEnablement.ApplyTo(genericConfig, controlplane.DefaultAPIResourceConfigSource(), legacyscheme.Scheme); lastErr != nil {
 		return
 	}
+	// 将命令行参数的EgressSelector flag赋值给通用配置
 	if lastErr = s.EgressSelector.ApplyTo(genericConfig); lastErr != nil {
 		return
 	}
+	// 将命令行参数的默认特性网关flag赋值给通用配置
 	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.APIServerTracing) {
 		if lastErr = s.Traces.ApplyTo(genericConfig.EgressSelector, genericConfig); lastErr != nil {
 			return
 		}
 	}
 	// wrap the definitions to revert any changes from disabled features
+	// GetOpenAPIDefinitions定义了OpenAPIDefinition文件，由openapi-gen代码生成器自动生成
 	getOpenAPIDefinitions := openapi.GetOpenAPIDefinitionsWithoutDisabledFeatures(generatedopenapi.GetOpenAPIDefinitions)
 	genericConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(getOpenAPIDefinitions, openapinamer.NewDefinitionNamer(legacyscheme.Scheme, extensionsapiserver.Scheme, aggregatorscheme.Scheme))
 	genericConfig.OpenAPIConfig.Info.Title = "Kubernetes"
@@ -398,12 +440,15 @@ func buildGenericConfig(
 	} else {
 		s.Etcd.StorageConfig.Transport.TracerProvider = oteltrace.NewNoopTracerProvider()
 	}
+	// 将命令行参数的etcd flag赋值给通用配置
 	if lastErr = s.Etcd.Complete(genericConfig.StorageObjectCountTracker, genericConfig.DrainedNotify(), genericConfig.AddPostStartHook); lastErr != nil {
 		return
 	}
 
+	// 实例化storageFactoryConfig，定义了与ETCD的交互方式
 	storageFactoryConfig := kubeapiserver.NewStorageFactoryConfig()
 	storageFactoryConfig.APIResourceConfig = genericConfig.MergedResourceConfig
+	// 根据通用配置中api资源列表在etcd中创建存储
 	storageFactory, lastErr = storageFactoryConfig.Complete(s.Etcd).New()
 	if lastErr != nil {
 		return
@@ -429,11 +474,13 @@ func buildGenericConfig(
 	}
 	versionedInformers = clientgoinformers.NewSharedInformerFactory(clientgoExternalClient, 10*time.Minute)
 
+	// 认证
 	// Authentication.ApplyTo requires already applied OpenAPIConfig and EgressSelector if present
 	if lastErr = s.Authentication.ApplyTo(&genericConfig.Authentication, genericConfig.SecureServing, genericConfig.EgressSelector, genericConfig.OpenAPIConfig, genericConfig.OpenAPIV3Config, clientgoExternalClient, versionedInformers); lastErr != nil {
 		return
 	}
 
+	// 授权
 	genericConfig.Authorization.Authorizer, genericConfig.RuleResolver, err = BuildAuthorizer(s, genericConfig.EgressSelector, versionedInformers)
 	if err != nil {
 		lastErr = fmt.Errorf("invalid authorization config: %v", err)
@@ -448,6 +495,7 @@ func buildGenericConfig(
 		return
 	}
 
+	// 准入
 	admissionConfig := &kubeapiserveradmission.Config{
 		ExternalInformers:    versionedInformers,
 		LoopbackClientConfig: genericConfig.LoopbackClientConfig,
@@ -525,6 +573,7 @@ func Complete(s *options.ServerRunOptions) (completedServerRunOptions, error) {
 
 	// process s.ServiceClusterIPRange from list to Primary and Secondary
 	// we process secondary only if provided by user
+	// 获取service IP地址范围
 	apiServerServiceIP, primaryServiceIPRange, secondaryServiceIPRange, err := getServiceIPAndRanges(s.ServiceClusterIPRanges)
 	if err != nil {
 		return options, err
@@ -533,10 +582,12 @@ func Complete(s *options.ServerRunOptions) (completedServerRunOptions, error) {
 	s.SecondaryServiceClusterIPRange = secondaryServiceIPRange
 	s.APIServerServiceIP = apiServerServiceIP
 
+	//使用api-server service IP创建自签证书
 	if err := s.SecureServing.MaybeDefaultWithSelfSignedCerts(s.GenericServerRunOptions.AdvertiseAddress.String(), []string{"kubernetes.default.svc", "kubernetes.default", "kubernetes"}, []net.IP{apiServerServiceIP}); err != nil {
 		return options, fmt.Errorf("error creating self-signed certificates: %v", err)
 	}
 
+	// 如果参数没有ExternalHost则使用AdvertiseAddress，如果也没有，就使用主机的hostname
 	if len(s.GenericServerRunOptions.ExternalHost) == 0 {
 		if len(s.GenericServerRunOptions.AdvertiseAddress) > 0 {
 			s.GenericServerRunOptions.ExternalHost = s.GenericServerRunOptions.AdvertiseAddress.String()
@@ -547,9 +598,11 @@ func Complete(s *options.ServerRunOptions) (completedServerRunOptions, error) {
 			}
 			s.GenericServerRunOptions.ExternalHost = hostname
 		}
+		// 日志记录最终的函数逻辑产生的ExternalHost
 		klog.Infof("external host was not specified, using %v", s.GenericServerRunOptions.ExternalHost)
 	}
 
+	// 生成授权模式
 	s.Authentication.ApplyAuthorization(s.Authorization)
 
 	// Use (ServiceAccountSigningKeyFile != "") as a proxy to the user enabling
@@ -557,6 +610,7 @@ func Complete(s *options.ServerRunOptions) (completedServerRunOptions, error) {
 	// a lot of people when they rotated their serving cert with no idea it was
 	// connected to their service account keys. We are taking this opportunity to
 	// remove this problematic defaulting.
+	// 如果没有SA证书，则使用集群证书。如果有SA证书则校验无误后使用
 	if s.ServiceAccountSigningKeyFile == "" {
 		// Default to the private server key for service account token signing
 		if len(s.Authentication.ServiceAccounts.KeyFiles) == 0 && s.SecureServing.ServerCert.CertKey.KeyFile != "" {
@@ -576,6 +630,7 @@ func Complete(s *options.ServerRunOptions) (completedServerRunOptions, error) {
 		if s.Authentication.ServiceAccounts.MaxExpiration != 0 {
 			lowBound := time.Hour
 			upBound := time.Duration(1<<32) * time.Second
+			//参数中过期时间应该是1~60h
 			if s.Authentication.ServiceAccounts.MaxExpiration < lowBound ||
 				s.Authentication.ServiceAccounts.MaxExpiration > upBound {
 				return options, fmt.Errorf("the service-account-max-token-expiration must be between 1 hour and 2^32 seconds")
@@ -597,6 +652,7 @@ func Complete(s *options.ServerRunOptions) (completedServerRunOptions, error) {
 		s.ServiceAccountTokenMaxExpiration = s.Authentication.ServiceAccounts.MaxExpiration
 	}
 
+	// Etcd.EnableWatchCache 实例化时写死true，etcd cache size值确定
 	if s.Etcd.EnableWatchCache {
 		sizes := kubeapiserver.DefaultWatchCacheSizes()
 		// Ensure that overrides parse correctly.
@@ -613,12 +669,14 @@ func Complete(s *options.ServerRunOptions) (completedServerRunOptions, error) {
 		}
 	}
 
+	// api接口列表标准化
 	for key, value := range s.APIEnablement.RuntimeConfig {
 		if key == "v1" || strings.HasPrefix(key, "v1/") ||
 			key == "api/v1" || strings.HasPrefix(key, "api/v1/") {
 			delete(s.APIEnablement.RuntimeConfig, key)
 			s.APIEnablement.RuntimeConfig["/v1"] = value
 		}
+		// api/legacy已经废弃
 		if key == "api/legacy" {
 			delete(s.APIEnablement.RuntimeConfig, key)
 		}
@@ -678,6 +736,7 @@ func getServiceIPAndRanges(serviceClusterIPRanges string) (net.IP, net.IPNet, ne
 	var secondaryServiceIPRange net.IPNet
 	var err error
 	// nothing provided by user, use default range (only applies to the Primary)
+	// 当没有传入参数时使用默认值10.0.0.0/24
 	if len(serviceClusterIPRangeList) == 0 {
 		var primaryServiceClusterCIDR net.IPNet
 		primaryServiceIPRange, apiServerServiceIP, err = controlplane.ServiceIPRange(primaryServiceClusterCIDR)
@@ -687,6 +746,7 @@ func getServiceIPAndRanges(serviceClusterIPRanges string) (net.IP, net.IPNet, ne
 		return apiServerServiceIP, primaryServiceIPRange, net.IPNet{}, nil
 	}
 
+	// 通过第一个参数得到primaryServiceIPRange, apiServerServiceIP
 	_, primaryServiceClusterCIDR, err := netutils.ParseCIDRSloppy(serviceClusterIPRangeList[0])
 	if err != nil {
 		return net.IP{}, net.IPNet{}, net.IPNet{}, fmt.Errorf("service-cluster-ip-range[0] is not a valid cidr")
@@ -699,6 +759,7 @@ func getServiceIPAndRanges(serviceClusterIPRanges string) (net.IP, net.IPNet, ne
 
 	// user provided at least two entries
 	// note: validation asserts that the list is max of two dual stack entries
+	// 允许用户传入2个IP地址CIDR，如果有则生成secondaryServiceIPRange
 	if len(serviceClusterIPRangeList) > 1 {
 		_, secondaryServiceClusterCIDR, err := netutils.ParseCIDRSloppy(serviceClusterIPRangeList[1])
 		if err != nil {

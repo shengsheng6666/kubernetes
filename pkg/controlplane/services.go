@@ -39,15 +39,18 @@ func ServiceIPRange(passedServiceClusterIPRange net.IPNet) (net.IPNet, net.IP, e
 	}
 
 	size := integer.Int64Min(utilnet.RangeSize(&serviceClusterIPRange), 1<<16)
+	// service ip range 最少8哥ip地址
 	if size < 8 {
 		return net.IPNet{}, net.IP{}, fmt.Errorf("the service cluster IP range must be at least %d IP addresses", 8)
 	}
 
 	// Select the first valid IP from ServiceClusterIPRange to use as the GenericAPIServer service IP.
+	// api-server service IP使用第一个地址
 	apiServerServiceIP, err := utilnet.GetIndexedIP(&serviceClusterIPRange, 1)
 	if err != nil {
 		return net.IPNet{}, net.IP{}, err
 	}
+	// api-server service IP记录日志
 	klog.V(4).Infof("Setting service IP to %q (read-write).", apiServerServiceIP)
 
 	return serviceClusterIPRange, apiServerServiceIP, nil

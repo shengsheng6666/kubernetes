@@ -129,6 +129,7 @@ func (cfg *Config) Complete() CompletedConfig {
 
 // New returns a new instance of CustomResourceDefinitions from the given config.
 func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget) (*CustomResourceDefinitions, error) {
+	//创建通用server，返回404
 	genericServer, err := c.GenericConfig.New("apiextensions-apiserver", delegationTarget)
 	if err != nil {
 		return nil, err
@@ -137,18 +138,24 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 	// hasCRDInformerSyncedSignal is closed when the CRD informer this server uses has been fully synchronized.
 	// It ensures that requests to potential custom resource endpoints while the server hasn't installed all known HTTP paths get a 503 error instead of a 404
 	hasCRDInformerSyncedSignal := make(chan struct{})
+	// 注册MuxAndDiscoveryCompleteSignal会使得如果定义了资源但是没有定义handler的返回503 而不是404
 	if err := genericServer.RegisterMuxAndDiscoveryCompleteSignal("CRDInformerHasNotSynced", hasCRDInformerSyncedSignal); err != nil {
 		return nil, err
 	}
 
+	// 实例化一个crd结构体的指针，GenericAPIServer为上面定义的暂时返回404或503的api server
 	s := &CustomResourceDefinitions{
 		GenericAPIServer: genericServer,
 	}
 
+	// 获取全部API资源
 	apiResourceConfig := c.GenericConfig.MergedResourceConfig
+	// 创建apiGroupInfo
 	apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(apiextensions.GroupName, Scheme, metav1.ParameterCodec, Codecs)
+	// storage表示底层存储接口，每种资源对应一种storage
 	storage := map[string]rest.Storage{}
 	// customresourcedefinitions
+	// 创建CRD资源，并创建crd crd status的etcd存储接口
 	if resource := "customresourcedefinitions"; apiResourceConfig.ResourceEnabled(v1.SchemeGroupVersion.WithResource(resource)) {
 		customResourceDefinitionStorage, err := customresourcedefinition.NewREST(Scheme, c.GenericConfig.RESTOptionsGetter)
 		if err != nil {
@@ -161,6 +168,9 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 		apiGroupInfo.VersionedResourcesStorageMap[v1.SchemeGroupVersion.Version] = storage
 	}
 
+	//安装如下两个资源，暴露的restful路径如下，此时定义了资源但是没有handler返回503
+	// /apis/apiextensions.k8s.io/v1/customresourcedefinitions
+	// /apis/apiextensions.k8s.io/v1/customresourcedefinitions/status
 	if err := s.GenericAPIServer.InstallAPIGroup(&apiGroupInfo); err != nil {
 		return nil, err
 	}
@@ -173,20 +183,25 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 	}
 	s.Informers = externalinformers.NewSharedInformerFactory(crdClient, 5*time.Minute)
 
+	// 获取函数参数中的降级handler，如果为空，则设置默认notfound 返回404
 	delegateHandler := delegationTarget.UnprotectedHandler()
 	if delegateHandler == nil {
 		delegateHandler = http.NotFoundHandler()
 	}
 
+	// 版本handler定义
 	versionDiscoveryHandler := &versionDiscoveryHandler{
 		discovery: map[schema.GroupVersion]*discovery.APIVersionHandler{},
 		delegate:  delegateHandler,
 	}
+
+	// 组发现handler定义
 	groupDiscoveryHandler := &groupDiscoveryHandler{
 		discovery: map[string]*discovery.APIGroupHandler{},
 		delegate:  delegateHandler,
 	}
 	establishingController := establish.NewEstablishingController(s.Informers.Apiextensions().V1().CustomResourceDefinitions(), crdClient.ApiextensionsV1())
+	// 组合crd handler
 	crdHandler, err := NewCustomResourceDefinitionHandler(
 		versionDiscoveryHandler,
 		groupDiscoveryHandler,
@@ -206,10 +221,15 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 	if err != nil {
 		return nil, err
 	}
+
+	// 注册非gorestful路径
+	// 精确匹配/apis，即请求路径为/apis，则调用crdHandler
 	s.GenericAPIServer.Handler.NonGoRestfulMux.Handle("/apis", crdHandler)
+	// 前缀匹配/apis/，即请求路径包含/apis/，则调用crdHandler
 	s.GenericAPIServer.Handler.NonGoRestfulMux.HandlePrefix("/apis/", crdHandler)
 	s.GenericAPIServer.RegisterDestroyFunc(crdHandler.destroy)
 
+	// 创建各种controller
 	discoveryController := NewDiscoveryController(s.Informers.Apiextensions().V1().CustomResourceDefinitions(), versionDiscoveryHandler, groupDiscoveryHandler, genericServer.AggregatedDiscoveryGroupManager)
 	namingController := status.NewNamingConditionController(s.Informers.Apiextensions().V1().CustomResourceDefinitions(), crdClient.ApiextensionsV1())
 	nonStructuralSchemaController := nonstructuralschema.NewConditionController(s.Informers.Apiextensions().V1().CustomResourceDefinitions(), crdClient.ApiextensionsV1())

@@ -32,6 +32,7 @@ import (
 
 // TODO: Longer term we should read this from some config store, rather than a flag.
 // validateClusterIPFlags is expected to be called after Complete()
+// 参数校验
 func validateClusterIPFlags(options *ServerRunOptions) []error {
 	var errs []error
 	// maxCIDRBits is used to define the maximum CIDR size for the cluster ip(s)
@@ -143,6 +144,7 @@ func validateAPIPriorityAndFairness(options *ServerRunOptions) []error {
 }
 
 // Validate checks ServerRunOptions and return a slice of found errs.
+// api-server合法性校验，返回全部不符合校验的错误
 func (s *ServerRunOptions) Validate() []error {
 	var errs []error
 	if s.MasterCount <= 0 {

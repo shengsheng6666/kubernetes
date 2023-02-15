@@ -16,6 +16,7 @@ limitations under the License.
 
 // apiserver is the main api server and master for the cluster.
 // it is responsible for serving the cluster management API.
+// 基于cobra的api-server入口函数
 package main
 
 import (
